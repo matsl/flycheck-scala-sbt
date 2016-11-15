@@ -125,6 +125,7 @@ ERROR should come from `flycheck-scala-sbt--extract-error-info'."
 
 (flycheck-add-next-checker 'scala-sbt 'scala)
 
+;;;###autoload
 (defun flycheck-scala-sbt-init ()
   "Call this from your scala-mode-hook to set up flycheck-sbt."
   (setq-local flycheck-check-syntax-automatically '(mode-enabled save))
