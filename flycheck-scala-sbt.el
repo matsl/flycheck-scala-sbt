@@ -121,7 +121,7 @@ ERROR should come from `flycheck-scala-sbt--extract-error-info'."
   :predicate 'sbt:find-root
   :start 'flycheck-scala-sbt--start)
 
-(pushnew 'scala-sbt flycheck-checkers)
+(cl-pushnew 'scala-sbt flycheck-checkers)
 
 (flycheck-add-next-checker 'scala-sbt 'scala)
 
