@@ -2,7 +2,7 @@
 
 ;; Version: 0.1
 ;; Url: https://www.github.com/rjmac/flycheck-scala-sbt
-;; Package-requires: ((emacs "25.1") (sbt-mode "20161110.1221"))
+;; Package-requires: ((emacs "25.1") (flycheck "30") (sbt-mode "0.2"))
 
 ;;; Commentary:
 
@@ -13,19 +13,13 @@
 
 (require 'flycheck)
 (require 'sbt-mode)
-
-(defun flycheck-scala-sbt--working-directory (checker)
-  (sbt:find-root))
-
-(defun flycheck-scala-sbt--find-sbt ()
-  (let ((current-frame (selected-frame)))
-    (and current-frame (get-buffer-window (sbt:run-sbt) current-frame))))
-
-(defun flycheck-scala-sbt--hide-sbt ()
-  (let ((w (flycheck-scala-sbt--find-sbt)))
-    (when w (delete-window w))))
+(require 'cl-lib)
 
 (defun flycheck-scala-sbt--wait-for-prompt-then-call (sbt-buffer f)
+  "Wait for the SBT prompt in SBT-BUFFER, then call F.
+
+The function is called with same current buffer as was originally
+active when the original call was made."
   (lexical-let ((current-buffer (current-buffer))
                 (sbt-buffer sbt-buffer)
                 (f f))
@@ -33,15 +27,18 @@
                  (buffer-substring-no-properties (max (point-min) (- (point-max) 2)) (point-max)))))
       (if (string= end "> ")
           (funcall f)
-        (run-at-time 0.1 nil (lambda () (with-current-buffer current-buffer (flycheck-scala-sbt--wait-for-prompt-then-call sbt-buffer f))))))))
+        (run-at-time 0.1 nil (lambda ()
+                               (with-current-buffer current-buffer
+                                 (flycheck-scala-sbt--wait-for-prompt-then-call sbt-buffer f))))))))
 
-;; Waits for the sbt session in SBT-BUFFER to end with a prompt, then
-;; evaluates the block with the current buffer set to what it was when
-;; the macro was first evaluated.
 (defmacro flycheck-scala-sbt--wait-for-prompt-then (sbt-buffer &rest body)
+  "Wait for the SBT prompt in SBT-BUFFER, then evaluate BODY.
+
+This is just a macro wrapper for `flycheck-scala-sbt--wait-for-prompt-then-call'."
   `(flycheck-scala-sbt--wait-for-prompt-then-call ,sbt-buffer (lambda () ,@body)))
 
 (defun flycheck-scala-sbt--start (checker status-callback)
+  "The main entry point for the CHECKER.  Don't call this.  STATUS-CALLBACK."
   (lexical-let ((checker checker)
                 (status-callback status-callback)
                 (sbt-buffer (save-window-excursion (sbt:run-sbt))))
@@ -56,6 +53,7 @@
            (funcall status-callback 'errored (error-message-string err))))))))
 
 (defun flycheck-scala-sbt--errors-list (buffer checker)
+  "Find the current list of errors in BUFFER and convert them into errors for CHECKER."
   (let ((errors
          (with-current-buffer buffer
            (save-excursion
@@ -75,6 +73,11 @@
     (cl-mapcan (lambda (error) (flycheck-scala-sbt--convert-error-info checker error)) errors)))
 
 (defun flycheck-scala-sbt--extract-error-info ()
+  "Extract the error at point.
+
+The point should be placed on the last line of the error message,
+where sbt places the caret indicating the column in which the
+error occurred."
   (save-excursion
     (let ((line-regexp "^\\[\\(error\\|warn\\)][[:space:]]+\\(.*?\\):\\([0-9]+\\):[[:space:]]+\\(.*\\)$")
           (else-regexp "^\\[\\(error\\|warn\\)][[:space:]]\\(.*\\)$")
@@ -99,12 +102,15 @@
               (if (string= type "warn") 'warning 'error)
               message)))))
 
-(defun flycheck-scala-sbt--convert-error-info (checker error-stuff)
-  (let* ((file (nth 0 error-stuff))
-         (row (nth 1 error-stuff))
-         (col (nth 2 error-stuff))
-         (level (nth 3 error-stuff))
-         (message (nth 4 error-stuff))
+(defun flycheck-scala-sbt--convert-error-info (checker error)
+  "Provide CHECKER an ERROR converted into a flycheck-error.
+
+ERROR should come from `flycheck-scala-sbt--extract-error-info'."
+  (let* ((file (nth 0 error))
+         (row (nth 1 error))
+         (col (nth 2 error))
+         (level (nth 3 error))
+         (message (nth 4 error))
          (buffer (find-buffer-visiting file)))
     ;; it sure seems like you should be able to return errors in other
     ;; buffers, but it seems flycheck tries to highlight all errors in
@@ -117,8 +123,7 @@
   "Check SBT processes"
   :modes 'scala-mode
   :predicate 'sbt:find-root
-  :start 'flycheck-scala-sbt--start
-  :working-directory 'flycheck-scala-sbt--working-directory)
+  :start 'flycheck-scala-sbt--start)
 
 (pushnew 'scala-sbt flycheck-checkers)
 
