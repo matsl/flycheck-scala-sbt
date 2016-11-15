@@ -1,4 +1,4 @@
-;;; flycheck-scala-sbt.el --- sbt-mode checker for Scala
+;;; flycheck-scala-sbt.el --- sbt-mode checker for Scala -*- lexical-binding: t -*-
 
 ;; Version: 0.1
 ;; Url: https://www.github.com/rjmac/flycheck-scala-sbt
@@ -20,9 +20,7 @@
 
 The function is called with same current buffer as was originally
 active when the original call was made."
-  (lexical-let ((current-buffer (current-buffer))
-                (sbt-buffer sbt-buffer)
-                (f f))
+  (let ((current-buffer (current-buffer)))
     (let ((end (with-current-buffer sbt-buffer
                  (buffer-substring-no-properties (max (point-min) (- (point-max) 2)) (point-max)))))
       (if (string= end "> ")
@@ -39,9 +37,7 @@ This is just a macro wrapper for `flycheck-scala-sbt--wait-for-prompt-then-call'
 
 (defun flycheck-scala-sbt--start (checker status-callback)
   "The main entry point for the CHECKER.  Don't call this.  STATUS-CALLBACK."
-  (lexical-let ((checker checker)
-                (status-callback status-callback)
-                (sbt-buffer (save-window-excursion (sbt:run-sbt))))
+  (let ((sbt-buffer (save-window-excursion (sbt:run-sbt))))
     (flycheck-scala-sbt--wait-for-prompt-then sbt-buffer
       (save-window-excursion
         (let ((sbt:save-some-buffers nil))
