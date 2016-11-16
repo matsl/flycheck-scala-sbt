@@ -146,11 +146,10 @@ ERROR should come from `flycheck-scala-sbt--extract-error-info'."
   "Check scala buffers using sbt-mode"
   :modes 'scala-mode
   :predicate 'sbt:find-root
-  :start 'flycheck-scala-sbt--start)
+  :start 'flycheck-scala-sbt--start
+  :next-checkers '((warning . scala-scalastyle)))
 
 (cl-pushnew 'scala-sbt flycheck-checkers)
-
-(flycheck-add-next-checker 'scala-sbt 'scala)
 
 ;;;###autoload
 (defun flycheck-scala-sbt-init ()
