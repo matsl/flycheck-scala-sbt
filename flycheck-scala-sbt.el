@@ -33,7 +33,7 @@ a build-script error prompt was found.
 
 The function is called with same current buffer as was originally
 active when the original call was made."
-  (let ((current-buffer (current-buffer)))
+  (let ((original-buffer (current-buffer)))
     (let ((last-line (with-current-buffer sbt-buffer
                        (save-excursion
                          (goto-char (point-max))
@@ -41,35 +41,39 @@ active when the original call was made."
       (case (flycheck-scala-sbt--default-prompt-detection last-line)
         ((:build-error) (funcall f nil))
         ((nil) (run-at-time 0.1 nil (lambda ()
-                                      (with-current-buffer current-buffer
+                                      (with-current-buffer original-buffer
                                         (flycheck-scala-sbt--wait-for-prompt-then-call sbt-buffer f)))))
         (otherwise (funcall f t))))))
 
-(cl-defmacro flycheck-scala-sbt--wait-for-prompt-then ((sbt-buffer &key result) &body body)
-  "Wait for the SBT prompt in SBT-BUFFER, then evaluate BODY.
+(cl-defmacro flycheck-scala-sbt--wait-for-prompt-then ((sbt-buffer status-callback) &body body)
+  "Wait for the SBT prompt in SBT-BUFFER, using STATUS-CALLBACK for failure, then evaluate BODY.
 
-This is just a macro wrapper for `flycheck-scala-sbt--wait-for-prompt-then-call'."
-  `(flycheck-scala-sbt--wait-for-prompt-then-call ,sbt-buffer (lambda (,(or result (gensym))) ,@body)))
+STATUS-CALLBACK is used for reporting errors if the project build
+fails or if BODY throws an error."
+  (let ((sbt-buffer-var (gensym))
+        (status-callback-var (gensym))
+        (result (gensym))
+        (err (gensym)))
+    `(let ((,sbt-buffer-var ,sbt-buffer)
+           (,status-callback-var ,status-callback))
+       (flycheck-scala-sbt--wait-for-prompt-then-call
+        ,sbt-buffer-var
+        (lambda (,result)
+          (if ,result
+              (condition-case ,err (progn ,@body)
+                (error (funcall ,status-callback-var 'errored (error-message-string ,err))))
+            (pop-to-buffer ,sbt-buffer-var)
+            (funcall ,status-callback-var 'errored "Project build failed")))))))
 
 (defun flycheck-scala-sbt--start (checker status-callback)
   "The main entry point for the CHECKER.  Don't call this.  STATUS-CALLBACK."
   (let ((sbt-buffer (save-window-excursion (sbt:run-sbt))))
-    (flycheck-scala-sbt--wait-for-prompt-then (sbt-buffer :result found-prompt)
-      (if found-prompt
-          (progn
-            (save-window-excursion
-              (let ((sbt:save-some-buffers nil))
-                (sbt:command "compile" nil)))
-            (flycheck-scala-sbt--wait-for-prompt-then (sbt-buffer :result found-prompt)
-              (if found-prompt
-                  (condition-case err
-                      (funcall status-callback 'finished (flycheck-scala-sbt--errors-list sbt-buffer checker))
-                    (error
-                     (funcall status-callback 'errored (error-message-string err))))
-                (pop-to-buffer sbt-buffer)
-                (funcall status-callback 'errored "Build failed"))))
-        (pop-to-buffer sbt-buffer)
-        (funcall status-callback 'errored "Build failed")))))
+    (flycheck-scala-sbt--wait-for-prompt-then (sbt-buffer status-callback)
+      (save-window-excursion
+        (let ((sbt:save-some-buffers nil))
+          (sbt:command "compile" nil)))
+      (flycheck-scala-sbt--wait-for-prompt-then (sbt-buffer status-callback)
+        (funcall status-callback 'finished (flycheck-scala-sbt--errors-list sbt-buffer checker))))))
 
 (defun flycheck-scala-sbt--errors-list (buffer checker)
   "Find the current list of errors in BUFFER and convert them into errors for CHECKER."
