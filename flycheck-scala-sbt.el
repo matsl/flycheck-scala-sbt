@@ -64,7 +64,7 @@ This is just a macro wrapper for `flycheck-scala-sbt--wait-for-prompt-then-call'
                ;; indicate the column, and then working backward two lines to
                ;; find the relevant filename, row, and message.
                (while (re-search-forward "^\\[\\(error\\|warn\\)][[:space:]]+^$" (point-max) t)
-                 (setf acc (cons (flycheck-scala-sbt--extract-error-info) acc)))
+                 (push (flycheck-scala-sbt--extract-error-info) acc))
                (reverse acc))))))
     (cl-mapcan (lambda (error) (flycheck-scala-sbt--convert-error-info checker error)) errors)))
 
