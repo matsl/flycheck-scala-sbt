@@ -116,7 +116,7 @@ ERROR should come from `flycheck-scala-sbt--extract-error-info'."
 
 (flycheck-define-generic-checker
     'scala-sbt
-  "Check SBT processes"
+  "Check scala processes using sbt-mode"
   :modes 'scala-mode
   :predicate 'sbt:find-root
   :start 'flycheck-scala-sbt--start)
