@@ -1,7 +1,9 @@
 flycheck-scala-sbt
 ==================
 
-A [flycheck](http://www.flycheck.org/) checker for [sbt-mode](https://github.com/ensime/emacs-sbt-mode).
+A [flycheck](http://www.flycheck.org/) checker for Scala which uses
+[sbt-mode](https://github.com/ensime/emacs-sbt-mode) to provide a
+persistent SBT session.
 
 Usage
 -----
