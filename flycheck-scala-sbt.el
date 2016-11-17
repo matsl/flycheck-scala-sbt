@@ -16,11 +16,11 @@
 (require 'cl-lib)
 
 (defun flycheck-scala-sbt--build-error-p (line)
-  "Test whether LINE indicates that building the project itself failed"
+  "Test whether LINE indicates that building the project itself failed."
   (string= "Project loading failed: (r)etry, (q)uit, (l)ast, or (i)gnore? " line))
 
 (defun flycheck-scala-sbt--default-prompt-detection (line)
-  "Test whether LINE represents an SBT input prompt"
+  "Test whether LINE represents an SBT input prompt."
   (if (flycheck-scala-sbt--build-error-p line)
       :build-error
     (string= line "> ")))
@@ -28,7 +28,7 @@
 (defun flycheck-scala-sbt--wait-for-prompt-then-call (sbt-buffer f)
   "Wait for the SBT prompt in SBT-BUFFER, then call F.
 
-F is called with `t' if a normal prompt was detected or `nil' if
+F is called with t if a normal prompt was detected or nil if
 a build-script error prompt was found.
 
 The function is called with same current buffer as was originally
@@ -45,7 +45,7 @@ active when the original call was made."
                                         (flycheck-scala-sbt--wait-for-prompt-then-call sbt-buffer f)))))
         (otherwise (funcall f t))))))
 
-(cl-defmacro flycheck-scala-sbt--wait-for-prompt-then ((sbt-buffer status-callback) &body body)
+(cl-defmacro flycheck-scala-sbt--wait-for-prompt-then ((sbt-buffer status-callback &key retry-p) &body body)
   "Wait for the SBT prompt in SBT-BUFFER, using STATUS-CALLBACK for failure, then evaluate BODY.
 
 STATUS-CALLBACK is used for reporting errors if the project build
@@ -62,16 +62,41 @@ fails or if BODY throws an error."
           (if ,result
               (condition-case ,err (progn ,@body)
                 (error (funcall ,status-callback-var 'errored (error-message-string ,err))))
-            (pop-to-buffer ,sbt-buffer-var)
-            (funcall ,status-callback-var 'errored "Project build failed")))))))
+            ,(if retry-p
+                 `(progn
+                    ;; ok, there's a build script error, but we've
+                    ;; been told to retry!  Do so, then retry the
+                    ;; wait, this time without the option to retry.
+                    (with-current-buffer ,sbt-buffer-var
+                      (goto-char (point-max))
+                      (comint-send-string (get-buffer-process ,sbt-buffer-var) "r\n")
+                      (sbt:clear ,sbt-buffer-var)
+                      (comint-clear-buffer))
+                    (flycheck-scala-sbt--wait-for-prompt-then (,sbt-buffer-var ,status-callback-var) ,@body :retry-p nil))
+               `(progn
+                  (display-buffer ,sbt-buffer-var)
+                  (funcall ,status-callback-var 'errored "Project build failed")))))))))
+
+(defun flycheck-scala-sbt--build-script-p (file)
+  "Check whether FILE is likely a part of the build script.
+
+FILE can be either a buffer or a filename.
+
+Returns true if the name ends in \".sbt\" or if the last
+directory in the path is \"project\"."
+  (let ((filename (if (bufferp file) (buffer-file-name file) file)))
+    (and filename (or (string-suffix-p ".sbt" filename)
+                      (string-match "/project/[^/]+$" filename)))))
 
 (defun flycheck-scala-sbt--start (checker status-callback)
   "The main entry point for the CHECKER.  Don't call this.  STATUS-CALLBACK."
   (let ((sbt-buffer (save-window-excursion (sbt:run-sbt))))
-    (flycheck-scala-sbt--wait-for-prompt-then (sbt-buffer status-callback)
+    (flycheck-scala-sbt--wait-for-prompt-then (sbt-buffer status-callback :retry-p t)
       (save-window-excursion
         (let ((sbt:save-some-buffers nil))
-          (sbt:command "compile" nil)))
+          (if (flycheck-scala-sbt--build-script-p (current-buffer))
+              (sbt:command ";reload;compile" nil)
+            (sbt:command "compile" nil))))
       (flycheck-scala-sbt--wait-for-prompt-then (sbt-buffer status-callback)
         (funcall status-callback 'finished (flycheck-scala-sbt--errors-list sbt-buffer checker))))))
 
