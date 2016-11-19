@@ -15,6 +15,43 @@
 (require 'sbt-mode)
 (require 'cl-lib)
 
+(defgroup flycheck-scala-sbt nil
+  "Scala support for Flycheck via sbt-mode."
+  :prefix "flycheck-scala-sbt-"
+  :tag "Scala-SBT"
+  :group 'flycheck)
+
+(defcustom flycheck-scala-sbt-collect-from-other-files-p
+  t
+  "Whether to collect errors and warnings from other files.
+
+If set, errors detected in other files are shown at the start of
+the current buffer."
+  :type 'boolean
+  :tag "Collect from other files"
+  :group 'flycheck-scala-sbt)
+
+(defcustom flycheck-scala-sbt-auto-reload-p
+  t
+  "Whether to automatically reload the project when the build changes.
+
+If set, changes to .sbt files and .scala files living in
+directories named \"project\" trigger an SBT reload before
+compiling."
+  :type 'boolean
+  :tag "Reload SBT automatically"
+  :group 'flycheck-scala-sbt)
+
+(defcustom flycheck-scala-sbt-auto-exit-console-p
+  t
+  "Whether to automatically exit from a console session.
+
+If set, when SBT is in a console session flycheck will exit it to
+issue a compile command."
+  :type 'boolean
+  :tag "Exit REPL automatically"
+  :group 'flycheck-scala-sbt)
+
 (defun flycheck-scala-sbt--build-error-p (line)
   "Test whether LINE indicates that building the project itself failed."
   (string= "Project loading failed: (r)etry, (q)uit, (l)ast, or (i)gnore? " line))
@@ -127,7 +164,8 @@ directory in the path is \"project\"."
              ;; ok, everything's good with the build script as far as
              ;; we know.  Let's try building stuff!
              (let ((sbt:save-some-buffers nil))
-               (if (flycheck-scala-sbt--build-script-p (current-buffer))
+               (if (and flycheck-scala-sbt-auto-reload-p
+                        (flycheck-scala-sbt--build-script-p (current-buffer)))
                    (progn
                      ;; we're in a build script (probably) so issue a
                      ;; reload to pick up changes to it.
@@ -137,14 +175,20 @@ directory in the path is \"project\"."
                  (sbt:command "test:compile" nil)
                  (finish))))
             (:console
-             (sbt:clear sbt-buffer)
-             (comint-send-string sbt-buffer ":quit\n")
-             (flycheck-scala-sbt--start checker status-callback))
+             (if flycheck-scala-sbt-auto-exit-console-p
+                 (progn
+                   (sbt:clear sbt-buffer)
+                   (comint-send-string sbt-buffer ":quit\n")
+                   (flycheck-scala-sbt--start checker status-callback))
+               (funcall status-callback 'errored "SBT is in a console session.  Exit it to reenable flycheck.")))
             (:build-error
              ;; nope, we left off in a bad place.  Issue a retry and
              ;; see if that fixes things.
-             (flycheck-scala-sbt--issue-retry sbt-buffer)
-             (finish-post-reload))))))))
+             (if flycheck-scala-sbt-auto-reload-p
+                 (progn
+                   (flycheck-scala-sbt--issue-retry sbt-buffer)
+                   (finish-post-reload))
+               (funcall status-callback 'errored "The project failed to load.")))))))))
 
 (defun flycheck-scala-sbt--errors-list (sbt-buffer checker)
   "Find the current list of errors in SBT-BUFFER and convert them into errors for CHECKER."
@@ -164,7 +208,7 @@ directory in the path is \"project\"."
                (while (re-search-forward "^\\(\\[\\(error\\|warn\\)][[:space:]]\\)?[[:space:]]*^$" (point-max) t)
                  (push (flycheck-scala-sbt--extract-error-info) acc))
                (reverse acc))))))
-    (mapcar (lambda (error) (flycheck-scala-sbt--convert-error-info checker error)) errors)))
+    (cl-mapcan (lambda (error) (flycheck-scala-sbt--convert-error-info checker error)) errors)))
 
 (defun flycheck-scala-sbt--extract-error-info ()
   "Extract the error at point.
@@ -273,15 +317,18 @@ ERROR should come from `flycheck-scala-sbt--extract-error-info'."
     ;; it sure seems like you should be able to return errors in other
     ;; buffers, but it seems flycheck tries to highlight all errors in
     ;; the CURRENT buffer no matter what buffer they were sourced from.
-    (if (eql buffer (current-buffer))
-        (flycheck-error-new :buffer buffer :message message :checker checker :filename file :line row :column col :level level)
-      (flycheck-error-new :buffer (current-buffer)
-                          :message (concat "from " file ":" (prin1-to-string row) ":" (prin1-to-string col) ":\n  " (replace-regexp-in-string "\n" "\n  " message))
-                          :checker checker
-                          :filename (buffer-file-name)
-                          :line 1
-                          :column 1
-                          :level level))))
+    (cond
+     ((eql buffer (current-buffer))
+      (list (flycheck-error-new :buffer buffer :message message :checker checker :filename file :line row :column col :level level)))
+     (flycheck-scala-sbt-collect-from-other-files-p
+      (list (flycheck-error-new :buffer (current-buffer)
+                                :message (concat "from " file ":" (prin1-to-string row) ":" (prin1-to-string col) ":\n  " (replace-regexp-in-string "\n" "\n  " message))
+                                :checker checker
+                                :filename (buffer-file-name)
+                                :line 1
+                                :column 1
+                                :level level)))
+     (t nil))))
 
 (flycheck-define-generic-checker
     'scala-sbt
