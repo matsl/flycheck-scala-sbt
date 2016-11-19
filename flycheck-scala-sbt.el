@@ -19,18 +19,20 @@
   "Test whether LINE indicates that building the project itself failed."
   (string= "Project loading failed: (r)etry, (q)uit, (l)ast, or (i)gnore? " line))
 
-(defun flycheck-scala-sbt--default-prompt-detection (line)
+(defun flycheck-scala-sbt--prompt-detection (line)
   "Test whether LINE represents an SBT input prompt."
   (cond
    ((flycheck-scala-sbt--build-error-p line) :build-error)
-   ((string= line "> ") :normal)
+   ((string-match sbt:sbt-prompt-regexp line) :normal)
+   ((string-match sbt:console-prompt-regexp line) :console)
    (t nil)))
 
 (defun flycheck-scala-sbt--wait-for-prompt-then-call (sbt-buffer f)
   "Wait for the SBT prompt in SBT-BUFFER, then call F.
 
-F is called with `:normal' if a normal prompt was detected or
-`:build-error' if a build-script error prompt was found.
+F is called with `:normal' if a normal SBT, prompt was detected,
+`:console' if a Scala console prompt was, or `:build-error' if a
+build-script error prompt was found.
 
 The function is called with same current buffer as was originally
 active when the original call was made."
@@ -39,7 +41,7 @@ active when the original call was made."
                         (save-excursion
                           (goto-char (point-max))
                           (buffer-substring-no-properties (line-beginning-position) (line-end-position)))))
-           (prompt-type (flycheck-scala-sbt--default-prompt-detection last-line)))
+           (prompt-type (flycheck-scala-sbt--prompt-detection last-line)))
       (if prompt-type
           (funcall f prompt-type)
         (run-at-time 0.1 nil (lambda ()
@@ -111,6 +113,8 @@ directory in the path is \"project\"."
                          (let ((sbt:save-some-buffers nil)
                                (sbt:clear-buffer-before-command nil))
                            (sbt:command "compile" nil))))
+                      (:console
+                       (error "Didn't expect to end up in console mode here!"))
                       (:build-error
                        ;; The reload didn't succeed.  Ok then, we'll
                        ;; just collect what diagnostics we have.
@@ -132,6 +136,10 @@ directory in the path is \"project\"."
                  ;; Normal source file, just recompile.
                  (sbt:command "compile" nil)
                  (finish))))
+            (:console
+             (sbt:clear sbt-buffer)
+             (comint-send-string sbt-buffer ":quit\n")
+             (flycheck-scala-sbt--start checker status-callback))
             (:build-error
              ;; nope, we left off in a bad place.  Issue a retry and
              ;; see if that fixes things.
