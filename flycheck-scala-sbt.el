@@ -112,7 +112,7 @@ directory in the path is \"project\"."
                              (delete-region (line-beginning-position) (line-end-position))))
                          (let ((sbt:save-some-buffers nil)
                                (sbt:clear-buffer-before-command nil))
-                           (sbt:command "compile" nil))))
+                           (sbt:command "test:compile" nil))))
                       (:console
                        (error "Didn't expect to end up in console mode here!"))
                       (:build-error
@@ -134,7 +134,7 @@ directory in the path is \"project\"."
                      (sbt:command "reload" nil)
                      (finish-post-reload))
                  ;; Normal source file, just recompile.
-                 (sbt:command "compile" nil)
+                 (sbt:command "test:compile" nil)
                  (finish))))
             (:console
              (sbt:clear sbt-buffer)
