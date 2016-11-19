@@ -50,10 +50,9 @@ active when the original call was made."
   "Issue a retry command in SBT-BUFFER after a build script failure."
   (with-current-buffer sbt-buffer
     (goto-char (point-max))
-    (comint-send-string (get-buffer-process sbt-buffer) "r\n")
-    (sbt:clear sbt-buffer)
-    ;; this additional clear is required because otherwise the buffer is left in read-only mode
-    (comint-clear-buffer)))
+    (let ((inhibit-read-only t))
+      (comint-send-string (get-buffer-process sbt-buffer) "r\n"))
+    (sbt:clear sbt-buffer)))
 
 (cl-defmacro flycheck-scala-sbt--wait-for-prompt-then (sbt-buffer status-callback (&key prompt-type) &body body)
   "Wait for the SBT prompt in SBT-BUFFER, using STATUS-CALLBACK for failure, then evaluate BODY.
@@ -87,18 +86,57 @@ directory in the path is \"project\"."
 (defun flycheck-scala-sbt--start (checker status-callback)
   "The main entry point for the CHECKER.  Don't call this.  STATUS-CALLBACK."
   (let ((sbt-buffer (save-window-excursion (sbt:run-sbt))))
-    (flycheck-scala-sbt--wait-for-prompt-then sbt-buffer status-callback (:prompt-type prompt-type)
-      (save-window-excursion
-        (cl-ecase prompt-type
-          (:normal
-           (let ((sbt:save-some-buffers nil))
-             (if (flycheck-scala-sbt--build-script-p (current-buffer))
-                 (sbt:command ";reload;compile" nil)
-               (sbt:command "compile" nil))))
-          (:build-error
-           (flycheck-scala-sbt--issue-retry sbt-buffer))))
-      (flycheck-scala-sbt--wait-for-prompt-then sbt-buffer status-callback ()
-        (funcall status-callback 'finished (flycheck-scala-sbt--errors-list sbt-buffer checker))))))
+    ;; ok, this is sort of complicated.
+    (cl-labels ((finish ()
+                  (flycheck-scala-sbt--wait-for-prompt-then sbt-buffer status-callback ()
+                    (funcall status-callback 'finished (flycheck-scala-sbt--errors-list sbt-buffer checker))))
+                (finish-post-reload ()
+                  ;; We've just issued a reload.  Now we need to wait
+                  ;; for that to finish.
+                  (flycheck-scala-sbt--wait-for-prompt-then sbt-buffer status-callback (:prompt-type prompt-type)
+                    (cl-ecase prompt-type
+                      (:normal
+                       ;; Good -- it finished normally.  Now send a
+                       ;; compile command without clearing the buffer,
+                       ;; so we can collect diagnostics from both the
+                       ;; reload and the compile.
+                       (save-window-excursion
+                         ;; First, delete our current prompt so that
+                         ;; we don't immediately say "hey there's a
+                         ;; prompt, we must be done".
+                         (with-current-buffer sbt-buffer
+                           (let ((inhibit-read-only t))
+                             (goto-char (point-max))
+                             (delete-region (line-beginning-position) (line-end-position))))
+                         (let ((sbt:save-some-buffers nil)
+                               (sbt:clear-buffer-before-command nil))
+                           (sbt:command "compile" nil))))
+                      (:build-error
+                       ;; The reload didn't succeed.  Ok then, we'll
+                       ;; just collect what diagnostics we have.
+                       t))
+                    (finish))))
+      (flycheck-scala-sbt--wait-for-prompt-then sbt-buffer status-callback (:prompt-type prompt-type)
+        (save-window-excursion
+          (cl-ecase prompt-type
+            (:normal
+             ;; ok, everything's good with the build script as far as
+             ;; we know.  Let's try building stuff!
+             (let ((sbt:save-some-buffers nil))
+               (if (flycheck-scala-sbt--build-script-p (current-buffer))
+                   (progn
+                     ;; we're in a build script (probably) so issue a
+                     ;; reload to pick up changes to it.
+                     (sbt:command "reload" nil)
+                     (finish-post-reload))
+                 ;; Normal source file, just recompile.
+                 (sbt:command "compile" nil)
+                 (finish))))
+            (:build-error
+             ;; nope, we left off in a bad place.  Issue a retry and
+             ;; see if that fixes things.
+             (flycheck-scala-sbt--issue-retry sbt-buffer)
+             (finish-post-reload))))))))
 
 (defun flycheck-scala-sbt--errors-list (sbt-buffer checker)
   "Find the current list of errors in SBT-BUFFER and convert them into errors for CHECKER."
