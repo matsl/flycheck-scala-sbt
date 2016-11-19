@@ -8,5 +8,7 @@ persistent SBT session.
 Usage
 -----
 
-Flycheck-scala-sbt is (or will shortly be) available on MELPA.  Call
-`flycheck-scala-sbt-init` from your `scala-mode-hook`.
+Flycheck-scala-sbt is available on MELPA.  The easy way to set it up
+is to call `flycheck-scala-sbt-init` from your `scala-mode-hook`.
+This just (locally) sets `flycheck-check-syntax-automatically` to
+`(mode-enabled save)` and turns on flycheck-mode.
