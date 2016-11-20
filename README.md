@@ -14,9 +14,18 @@ This just (locally) sets `flycheck-check-syntax-automatically` to
 `(mode-enabled save)` and turns on flycheck-mode.
 
 There are a small number of customizations available in the
-`flycheck-scala-sbt` group to allow turning off various automatic
+`flycheck-scala-sbt` group to allow selecting various automatic
 behaviors:
 
-* Reloading the project automatically
-* Exiting the REPL in order to run a check
-* Displaying errors from other files in the current buffer
+* Reloading the project automatically (default on)
+* Exiting the REPL in order to run a check (default on)
+* Displaying errors from other files in the current buffer (default on)
+* Enabling in Java-mode if an SBT project root is discovered (default off)
+
+Mixed Java/Scala Projects
+-------------------------
+
+If you configure flycheck-scala-sbt for java-mode as well, add
+`(flycheck-scala-sbt-init)` to your java-mode hook to set it up
+properly as an on-save checker.
+

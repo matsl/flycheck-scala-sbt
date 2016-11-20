@@ -52,6 +52,17 @@ issue a compile command."
   :tag "Exit REPL automatically"
   :group 'flycheck-scala-sbt)
 
+(defcustom flycheck-scala-sbt-enable-in-java-mode-p
+  nil
+  "Whether to register as a Java-mode checker.
+
+If set, the checker will register itself as a `java-mode' checker
+as well.  Changing this does not take immediate effect; Emacs must
+be restarted, as it affects the way the checker is defined."
+  :type 'boolean
+  :tag "Register as a Java-mode checker"
+  :group 'flycheck-scala-sbt)
+
 (defun flycheck-scala-sbt--build-error-p (line)
   "Test whether LINE indicates that building the project itself failed."
   (string= "Project loading failed: (r)etry, (q)uit, (l)ast, or (i)gnore? " line))
@@ -225,7 +236,7 @@ error occurred."
 
 (defun flycheck-scala-sbt--extract-main-error-info ()
   "Extract the non-build-script error or warning at point."
-  (let ((line-regexp "^\\[\\(error\\|warn\\)][[:space:]]+\\(.*?\\):\\([0-9]+\\):[[:space:]]+\\(.*\\)$")
+  (let ((line-regexp "^\\[\\(error\\|warn\\)][[:space:]]+\\(.*?\\):\\([0-9]+\\):[[:space:]]+\\(?:\\(?:error\\|warning\\):[[:space:]]*\\)?\\(.*\\)$")
         (else-regexp "^\\[\\(error\\|warn\\)][[:space:]]\\(.*\\)$")
         (subsequent-lines '())
         (current-line nil)
@@ -333,7 +344,7 @@ ERROR should come from `flycheck-scala-sbt--extract-error-info'."
 (flycheck-define-generic-checker
     'scala-sbt
   "Check scala buffers using sbt-mode"
-  :modes 'scala-mode
+  :modes (append '(scala-mode) (if flycheck-scala-sbt-enable-in-java-mode-p '(java-mode)))
   :predicate 'sbt:find-root
   :start 'flycheck-scala-sbt--start
   :next-checkers '((warning . scala-scalastyle)))
