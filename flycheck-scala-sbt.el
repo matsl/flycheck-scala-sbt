@@ -162,15 +162,19 @@ them, and there is a non-empty set of current checkers."
                 (flycheck-scala-sbt--wait-for-prompt-then ()
                   ;; first, do all our callbacks
                   (let ((state (flycheck-scala-sbt--state)))
-                    (let ((errors (flycheck-scala-sbt--errors-list)))
-                      (dolist (check (flycheck-scala-sbt--state-active state))
-                        (condition-case err
-                            (funcall (flycheck-scala-sbt--check-callback check)
-                                     'finished
-                                     (flycheck-scala-sbt--errors-convert check errors))
-                          (error
-                            (ignore-errors
-                              (funcall (flycheck-scala-sbt--check-callback check) 'errored (error-message-string err))))))))
+                    (condition-case err
+                        (let ((errors (flycheck-scala-sbt--errors-list)))
+                          (dolist (check (flycheck-scala-sbt--state-active state))
+                            (condition-case err
+                                (funcall (flycheck-scala-sbt--check-callback check)
+                                         'finished
+                                         (flycheck-scala-sbt--errors-convert check errors))
+                              (error
+                               (ignore-errors
+                                 (funcall (flycheck-scala-sbt--check-callback check) 'errored (error-message-string err)))))))
+                      (error ;; this is almsot certainly from accumulating the errors list
+                       (ignore-errors
+                         (broadcast-error-and-kickoff (error-message-string err))))))
                   (kickoff)))
               (finish-post-reload ()
                 ;; We've just issued a reload.  Now we need to wait
@@ -260,11 +264,10 @@ them, and there is a non-empty set of current checkers."
             (flycheck-scala-sbt--actually-start))
           check)))))
 
+(defconst flycheck-scala-sbt--weird-buildscript-regex "^\\[\\(error\\|warn\\)][[:space:]]\\[\\(.*\\)]:\\([0-9]+\\):[[:space:]]\\(.*\\)$")
 (defun flycheck-scala-sbt--errors-list ()
   "Find the current list of errors in the current buffer."
   (save-excursion
-    (goto-char (point-min))
-    (beginning-of-line)
     (let ((acc '()))
       ;; The horror, the horror
       ;;
@@ -273,9 +276,32 @@ them, and there is a non-empty set of current checkers."
       ;; The way this actually works is by finding the _carets_ that
       ;; indicate the column, and then working backward two lines to
       ;; find the relevant filename, row, and message.
+      (goto-char (point-min))
       (while (re-search-forward "^\\(\\[\\(error\\|warn\\)][[:space:]]\\)?[[:space:]]*^$" (point-max) t)
         (push (flycheck-scala-sbt--extract-error-info) acc))
+      (goto-char (point-min))
+      (while (re-search-forward flycheck-scala-sbt--weird-buildscript-regex (point-max) t)
+        (push (flycheck-scala-sbt--extract-weird-error-info) acc))
       (reverse acc))))
+
+(defun flycheck-scala-sbt--extract-weird-error-info ()
+  "Extract errors from build scripts in the occasional weird format.
+
+This format is [error] [$PATH]:$LINE: $MESSAGE.  There's no
+column information here, so we'll just set the column to nil"
+  (save-excursion
+    (let ((line (buffer-substring-no-properties (line-beginning-position)
+                                                 (line-end-position))))
+      (string-match flycheck-scala-sbt--weird-buildscript-regex line)
+      (let ((type (match-string 1 line))
+            (file (match-string 2 line))
+            (row (string-to-number (match-string 3 line)))
+            (message (match-string 4 line)))
+        (list file
+              row
+              nil
+              (if (string= type "warn") 'warning 'error)
+              message)))))
 
 (defun flycheck-scala-sbt--extract-error-info ()
   "Extract the error at point.
