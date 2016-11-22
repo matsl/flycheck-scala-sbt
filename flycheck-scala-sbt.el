@@ -63,6 +63,22 @@ be restarted, as it affects the way the checker is defined."
   :tag "Register as a Java-mode checker"
   :group 'flycheck-scala-sbt)
 
+(defcustom flycheck-scala-sbt-debug-p
+  nil
+  "Display extra debugging messages."
+  :type 'boolean
+  :tag "Display extra debugging messages"
+  :group 'flycheck-scala-sbt)
+
+(cl-defstruct flycheck-scala-sbt--check buffer checker project-p callback)
+(cl-defstruct flycheck-scala-sbt--state current-timer active pending)
+(defvar-local flycheck-scala-sbt--raw-state nil)
+(defun flycheck-scala-sbt--state ()
+  "Return the current buffer's state, creating it if necessary."
+  (unless flycheck-scala-sbt--raw-state
+    (setf flycheck-scala-sbt--raw-state (make-flycheck-scala-sbt--state :current-timer nil :active nil :pending nil)))
+  flycheck-scala-sbt--raw-state)
+
 (defun flycheck-scala-sbt--build-error-p (line)
   "Test whether LINE indicates that building the project itself failed."
   (string= "Project loading failed: (r)etry, (q)uit, (l)ast, or (i)gnore? " line))
@@ -75,8 +91,8 @@ be restarted, as it affects the way the checker is defined."
    ((string-match sbt:console-prompt-regexp line) :console)
    (t nil)))
 
-(defun flycheck-scala-sbt--wait-for-prompt-then-call (sbt-buffer f)
-  "Wait for the SBT prompt in SBT-BUFFER, then call F.
+(defun flycheck-scala-sbt--wait-for-prompt-then-call (f)
+  "Wait for the SBT prompt in the current buffer, then call F.
 
 F is called with `:normal' if a normal SBT, prompt was detected,
 `:console' if a Scala console prompt was, or `:build-error' if a
@@ -85,42 +101,31 @@ build-script error prompt was found.
 The function is called with same current buffer as was originally
 active when the original call was made."
   (let ((original-buffer (current-buffer)))
-    (let* ((last-line (with-current-buffer sbt-buffer
-                        (save-excursion
-                          (goto-char (point-max))
-                          (buffer-substring-no-properties (line-beginning-position) (line-end-position)))))
+    (let* ((last-line (save-excursion
+                        (goto-char (point-max))
+                        (buffer-substring-no-properties (line-beginning-position) (line-end-position))))
            (prompt-type (flycheck-scala-sbt--prompt-detection last-line)))
       (if prompt-type
           (funcall f prompt-type)
-        (run-at-time 0.1 nil (lambda ()
-                               (with-current-buffer original-buffer
-                                 (flycheck-scala-sbt--wait-for-prompt-then-call sbt-buffer f))))))))
+        (setf (flycheck-scala-sbt--state-current-timer (flycheck-scala-sbt--state))
+              (run-at-time 0.1 nil (lambda ()
+                                     (when (buffer-live-p original-buffer)
+                                       (with-current-buffer original-buffer
+                                         (setf (flycheck-scala-sbt--state-current-timer (flycheck-scala-sbt--state)) nil)
+                                         (flycheck-scala-sbt--wait-for-prompt-then-call f))))))))))
 
-(defun flycheck-scala-sbt--issue-retry (sbt-buffer)
-  "Issue a retry command in SBT-BUFFER after a build script failure."
-  (with-current-buffer sbt-buffer
-    (goto-char (point-max))
-    (let ((inhibit-read-only t))
-      (comint-send-string (get-buffer-process sbt-buffer) "r\n"))
-    (sbt:clear sbt-buffer)))
+(defun flycheck-scala-sbt--issue-retry ()
+  "Issue a retry after a build script failure."
+  (goto-char (point-max))
+  (let ((inhibit-read-only t))
+    (comint-send-string (get-buffer-process (current-buffer)) "r\n"))
+  (sbt:clear (current-buffer)))
 
-(cl-defmacro flycheck-scala-sbt--wait-for-prompt-then (sbt-buffer status-callback (&key prompt-type) &body body)
-  "Wait for the SBT prompt in SBT-BUFFER, using STATUS-CALLBACK for failure, then evaluate BODY.
-
-STATUS-CALLBACK is used for reporting errors if the project build
-fails or if BODY throws an error."
-  (let ((sbt-buffer-var (cl-gensym))
-        (status-callback-var (cl-gensym))
-        (err (cl-gensym))
-        (result (or prompt-type (cl-gensym))))
-    `(let ((,sbt-buffer-var ,sbt-buffer)
-           (,status-callback-var ,status-callback))
-       (flycheck-scala-sbt--wait-for-prompt-then-call
-        ,sbt-buffer-var
-        (lambda (,result)
-          (condition-case ,err
-              (progn ,@body)
-            (error (funcall ,status-callback-var 'errored (error-message-string ,err)))))))))
+(cl-defmacro flycheck-scala-sbt--wait-for-prompt-then ((&key prompt-type) &body body)
+  "Wait for the SBT prompt in the current buffer, then evaluate BODY."
+  (let ((result (or prompt-type (cl-gensym))))
+    `(flycheck-scala-sbt--wait-for-prompt-then-call
+      (lambda (,result) ,@body))))
 
 (defun flycheck-scala-sbt--build-script-p (file)
   "Check whether FILE is likely a part of the build script.
@@ -133,93 +138,144 @@ directory in the path is \"project\"."
     (and filename (or (string-suffix-p ".sbt" filename)
                       (string-match "/project/[^/]+$" filename)))))
 
-(defun flycheck-scala-sbt--start (checker status-callback)
-  "The main entry point for the CHECKER.  Don't call this.  STATUS-CALLBACK."
-  (let ((sbt-buffer (save-window-excursion (sbt:run-sbt))))
-    ;; ok, this is sort of complicated.
-    (cl-labels ((finish ()
-                  (flycheck-scala-sbt--wait-for-prompt-then sbt-buffer status-callback ()
-                    (funcall status-callback 'finished (flycheck-scala-sbt--errors-list sbt-buffer checker))))
-                (finish-post-reload ()
-                  ;; We've just issued a reload.  Now we need to wait
-                  ;; for that to finish.
-                  (flycheck-scala-sbt--wait-for-prompt-then sbt-buffer status-callback (:prompt-type prompt-type)
-                    (cl-ecase prompt-type
-                      (:normal
-                       ;; Good -- it finished normally.  Now send a
-                       ;; compile command without clearing the buffer,
-                       ;; so we can collect diagnostics from both the
-                       ;; reload and the compile.
-                       (save-window-excursion
-                         ;; First, delete our current prompt so that
-                         ;; we don't immediately say "hey there's a
-                         ;; prompt, we must be done".
-                         (with-current-buffer sbt-buffer
-                           (let ((inhibit-read-only t))
-                             (goto-char (point-max))
-                             (delete-region (line-beginning-position) (line-end-position))))
-                         (let ((sbt:save-some-buffers nil)
-                               (sbt:clear-buffer-before-command nil))
-                           (sbt:command "test:compile" nil))))
-                      (:console
-                       (error "Didn't expect to end up in console mode here!"))
-                      (:build-error
-                       ;; The reload didn't succeed.  Ok then, we'll
-                       ;; just collect what diagnostics we have.
-                       t))
-                    (finish))))
-      (flycheck-scala-sbt--wait-for-prompt-then sbt-buffer status-callback (:prompt-type prompt-type)
-        (save-window-excursion
-          (cl-ecase prompt-type
-            (:normal
-             ;; ok, everything's good with the build script as far as
-             ;; we know.  Let's try building stuff!
-             (let ((sbt:save-some-buffers nil))
-               (if (and flycheck-scala-sbt-auto-reload-p
-                        (flycheck-scala-sbt--build-script-p (current-buffer)))
-                   (progn
-                     ;; we're in a build script (probably) so issue a
-                     ;; reload to pick up changes to it.
-                     (sbt:command "reload" nil)
-                     (finish-post-reload))
-                 ;; Normal source file, just recompile.
-                 (sbt:command "test:compile" nil)
-                 (finish))))
-            (:console
-             (if flycheck-scala-sbt-auto-exit-console-p
-                 (progn
-                   (sbt:clear sbt-buffer)
-                   (comint-send-string sbt-buffer ":quit\n")
-                   (flycheck-scala-sbt--start checker status-callback))
-               (funcall status-callback 'errored "SBT is in a console session.  Exit it to reenable flycheck.")))
-            (:build-error
-             ;; nope, we left off in a bad place.  Issue a retry and
-             ;; see if that fixes things.
-             (if flycheck-scala-sbt-auto-reload-p
-                 (progn
-                   (flycheck-scala-sbt--issue-retry sbt-buffer)
-                   (finish-post-reload))
-               (funcall status-callback 'errored "The project failed to load.")))))))))
+(defun flycheck-scala-sbt--debug (format &rest args)
+  "Format FORMAT and ARGS in *Messages* when `flycheck-scala-sbt-debug-p' is true."
+  (when flycheck-scala-sbt-debug-p
+    (apply 'message format args)))
 
-(defun flycheck-scala-sbt--errors-list (sbt-buffer checker)
-  "Find the current list of errors in SBT-BUFFER and convert them into errors for CHECKER."
-  (let ((errors
-         (with-current-buffer sbt-buffer
-           (save-excursion
-             (goto-char (point-min))
-             (beginning-of-line)
-             (let ((acc '()))
-               ;; The horror, the horror
-               ;;
-               ;; Ok so.
-               ;;
-               ;; The way this actually works is by finding the _carets_ that
-               ;; indicate the column, and then working backward two lines to
-               ;; find the relevant filename, row, and message.
-               (while (re-search-forward "^\\(\\[\\(error\\|warn\\)][[:space:]]\\)?[[:space:]]*^$" (point-max) t)
-                 (push (flycheck-scala-sbt--extract-error-info) acc))
-               (reverse acc))))))
-    (cl-mapcan (lambda (error) (flycheck-scala-sbt--convert-error-info checker error)) errors)))
+(defun flycheck-scala-sbt--actually-start ()
+  "Run a (set of) checkers.
+
+On entry, the current buffer is the SBT buffer in which to run
+them, and there is a non-empty set of current checkers."
+  ;; ok, this is sort of complicated.  We have to wait for various
+  ;; prompts and issue commands, until finally we can collect errors
+  ;; and invoke the right callbacks with them.
+  (flycheck-scala-sbt--debug "Starting %s job(s)" (length (flycheck-scala-sbt--state-active (flycheck-scala-sbt--state))))
+  (cl-labels ((kickoff ()
+                (let ((state (flycheck-scala-sbt--state)))
+                  (cl-shiftf (flycheck-scala-sbt--state-active state) (flycheck-scala-sbt--state-pending state) nil)
+                  (when (flycheck-scala-sbt--state-active state)
+                    (flycheck-scala-sbt--debug "Starting deferred jobs")
+                    (flycheck-scala-sbt--actually-start))))
+              (finish ()
+                (flycheck-scala-sbt--wait-for-prompt-then ()
+                  ;; first, do all our callbacks
+                  (let ((state (flycheck-scala-sbt--state)))
+                    (let ((errors (flycheck-scala-sbt--errors-list)))
+                      (dolist (check (flycheck-scala-sbt--state-active state))
+                        (condition-case err
+                            (funcall (flycheck-scala-sbt--check-callback check)
+                                     'finished
+                                     (flycheck-scala-sbt--errors-convert check errors))
+                          (error
+                            (ignore-errors
+                              (funcall (flycheck-scala-sbt--check-callback check) 'errored (error-message-string err))))))))
+                  (kickoff)))
+              (finish-post-reload ()
+                ;; We've just issued a reload.  Now we need to wait
+                ;; for that to finish.
+                (flycheck-scala-sbt--wait-for-prompt-then (:prompt-type prompt-type)
+                  (cl-ecase prompt-type
+                    (:normal
+                     ;; Good -- it finished normally.  Now send a
+                     ;; compile command without clearing the buffer,
+                     ;; so we can collect diagnostics from both the
+                     ;; reload and the compile.
+                     (save-window-excursion
+                       ;; First, delete our current prompt so that we
+                       ;; don't immediately say "hey there's a prompt,
+                       ;; we must be done".
+                       (let ((inhibit-read-only t))
+                         (goto-char (point-max))
+                         (delete-region (line-beginning-position) (line-end-position)))
+                       (let ((sbt:save-some-buffers nil)
+                             (sbt:clear-buffer-before-command nil))
+                         (sbt:command "test:compile" nil))))
+                    (:console
+                     (error "Didn't expect to end up in console mode here!"))
+                    (:build-error
+                     ;; The reload didn't succeed.  Ok then, we'll
+                     ;; just collect what diagnostics we have.
+                     t))
+                  (finish)))
+              (broadcast-error-and-kickoff (msg)
+                (let ((state (flycheck-scala-sbt--state)))
+                  (dolist (check (flycheck-scala-sbt--state-active state))
+                    (ignore-errors
+                      (funcall (flycheck-scala-sbt--check-callback check)
+                               'errored
+                               msg))))
+                (kickoff)))
+    (flycheck-scala-sbt--wait-for-prompt-then (:prompt-type prompt-type)
+      (save-window-excursion
+        (cl-ecase prompt-type
+          (:normal
+           ;; ok, everything's good with the build script as far as we
+           ;; know.  Let's try building stuff!
+           (let ((sbt:save-some-buffers nil)
+                 (state (flycheck-scala-sbt--state)))
+             (if (and flycheck-scala-sbt-auto-reload-p
+                      (cl-find-if #'flycheck-scala-sbt--check-project-p (flycheck-scala-sbt--state-active state)))
+                 (progn
+                   ;; we're in a build script (probably) so issue a
+                   ;; reload to pick up changes to it.
+                   (flycheck-scala-sbt--debug "One of our buffers was (probably) a build script; reloading")
+                   (sbt:command "reload" nil)
+                   (finish-post-reload))
+               ;; Normal source file, just recompile.
+               (flycheck-scala-sbt--debug "One of our buffers was (probably) not a build script; just compiling")
+               (sbt:command "test:compile" nil)
+               (finish))))
+          (:console
+           (if flycheck-scala-sbt-auto-exit-console-p
+               (progn
+                 (sbt:clear (current-buffer))
+                 (comint-send-string (current-buffer) ":quit\n")
+                 (flycheck-scala-sbt--actually-start))
+             (broadcast-error-and-kickoff "SBT is in a console session.  Exit it to reenable flycheck.")))
+          (:build-error
+           ;; nope, we left off in a bad place.  Issue a retry and
+           ;; see if that fixes things.
+           (if flycheck-scala-sbt-auto-reload-p
+               (progn
+                 (flycheck-scala-sbt--issue-retry)
+                 (finish-post-reload))
+             (broadcast-error-and-kickoff "The project failed to load."))))))))
+
+(defun flycheck-scala-sbt--start (checker callback)
+  "The main entry point for the CHECKER.  Don't call this.  CALLBACK."
+  (save-window-excursion
+    (let* ((target-buffer (current-buffer))
+           (project-p (flycheck-scala-sbt--build-script-p target-buffer)))
+      (with-current-buffer (sbt:run-sbt)
+        (let ((state (flycheck-scala-sbt--state))
+              (check (make-flycheck-scala-sbt--check :buffer target-buffer :checker checker :project-p project-p :callback callback)))
+          (if (flycheck-scala-sbt--state-active state)
+              (progn
+                (flycheck-scala-sbt--debug "There is a check active for this SBT; deferring")
+                (push check (flycheck-scala-sbt--state-pending state)))
+            (flycheck-scala-sbt--debug "None active; starting")
+            (push check (flycheck-scala-sbt--state-active state))
+            (flycheck-scala-sbt--actually-start))
+          check)))))
+
+(defun flycheck-scala-sbt--errors-list ()
+  "Find the current list of errors in the current buffer."
+  (save-excursion
+    (goto-char (point-min))
+    (beginning-of-line)
+    (let ((acc '()))
+      ;; The horror, the horror
+      ;;
+      ;; Ok so.
+      ;;
+      ;; The way this actually works is by finding the _carets_ that
+      ;; indicate the column, and then working backward two lines to
+      ;; find the relevant filename, row, and message.
+      (while (re-search-forward "^\\(\\[\\(error\\|warn\\)][[:space:]]\\)?[[:space:]]*^$" (point-max) t)
+        (push (flycheck-scala-sbt--extract-error-info) acc))
+      (reverse acc))))
 
 (defun flycheck-scala-sbt--extract-error-info ()
   "Extract the error at point.
@@ -315,6 +371,26 @@ error occurred."
               (if (string= type "warn") 'warning 'error)
               message)))))
 
+(defun flycheck-scala-sbt--errors-convert (check errors)
+  "For the check run CHECK, convert the list of ERRORS to flycheck error objects."
+  (when (buffer-live-p (flycheck-scala-sbt--check-buffer check))
+    (with-current-buffer (flycheck-scala-sbt--check-buffer check)
+      (let ((checker (flycheck-scala-sbt--check-checker check)))
+        (cl-mapcan (lambda (error) (flycheck-scala-sbt--convert-error-info checker error)) errors)))))
+
+(defun flycheck-scala-sbt--interrupt (checker context)
+  "Cancel CHECKER's pending check CONTEXT.
+
+This only actually cancels the pending check if it is blocked
+behind some other running check."
+  (ignore checker)
+  (flycheck-scala-sbt--debug "Asked to interrupt a job")
+  (with-current-buffer (sbt:run-sbt)
+    (let ((state (flycheck-scala-sbt--state)))
+      (flycheck-scala-sbt--debug "Cancelling %s" (flycheck-scala-sbt--check-buffer context))
+      (setf (flycheck-scala-sbt--state-pending state) (remove context (flycheck-scala-sbt--state-pending state)))
+      (funcall (flycheck-scala-sbt--check-callback context) 'interrupted nil))))
+
 (defun flycheck-scala-sbt--convert-error-info (checker error)
   "Provide CHECKER an ERROR converted into a flycheck-error.
 
@@ -347,9 +423,23 @@ ERROR should come from `flycheck-scala-sbt--extract-error-info'."
   :modes (append '(scala-mode) (if flycheck-scala-sbt-enable-in-java-mode-p '(java-mode)))
   :predicate 'sbt:find-root
   :start 'flycheck-scala-sbt--start
-  :next-checkers '((warning . scala-scalastyle)))
+  :next-checkers '((warning . scala-scalastyle))
+  :interrupt 'flycheck-scala-sbt--interrupt)
 
 (cl-pushnew 'scala-sbt flycheck-checkers)
+
+(defun flycheck-scala-sbt--cleanup ()
+  "Fail pending flychecks before killing an SBT buffer."
+  (let ((state (flycheck-scala-sbt--state)))
+    (when (flycheck-scala-sbt--state-current-timer state)
+      (ignore-errors
+        (cancel-timer (flycheck-scala-sbt--state-current-timer state))))
+    (dolist (check (append (flycheck-scala-sbt--state-active state)
+                           (flycheck-scala-sbt--state-pending state)))
+      (ignore-errors (funcall (flycheck-scala-sbt--check-callback check) 'errored "The associated SBT process was killed")))
+    (setq flycheck-scala-sbt--raw-state nil)))
+
+(add-hook 'kill-buffer-hook 'flycheck-scala-sbt--cleanup)
 
 ;;;###autoload
 (defun flycheck-scala-sbt-init ()
