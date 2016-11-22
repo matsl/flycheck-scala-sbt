@@ -456,14 +456,15 @@ ERROR should come from `flycheck-scala-sbt--extract-error-info'."
 
 (defun flycheck-scala-sbt--cleanup ()
   "Fail pending flychecks before killing an SBT buffer."
-  (let ((state (flycheck-scala-sbt--state)))
-    (when (flycheck-scala-sbt--state-current-timer state)
-      (ignore-errors
-        (cancel-timer (flycheck-scala-sbt--state-current-timer state))))
-    (dolist (check (append (flycheck-scala-sbt--state-active state)
-                           (flycheck-scala-sbt--state-pending state)))
-      (ignore-errors (funcall (flycheck-scala-sbt--check-callback check) 'errored "The associated SBT process was killed")))
-    (setq flycheck-scala-sbt--raw-state nil)))
+  (when flycheck-scala-sbt--raw-state
+    (let ((state (flycheck-scala-sbt--state)))
+      (when (flycheck-scala-sbt--state-current-timer state)
+        (ignore-errors
+          (cancel-timer (flycheck-scala-sbt--state-current-timer state))))
+      (dolist (check (append (flycheck-scala-sbt--state-active state)
+                             (flycheck-scala-sbt--state-pending state)))
+        (ignore-errors (funcall (flycheck-scala-sbt--check-callback check) 'errored "The associated SBT process was killed")))
+      (setq flycheck-scala-sbt--raw-state nil))))
 
 (add-hook 'kill-buffer-hook 'flycheck-scala-sbt--cleanup)
 
