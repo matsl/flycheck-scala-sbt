@@ -26,8 +26,16 @@
   "Whether to collect errors and warnings from other files.
 
 If set, errors detected in other files are shown at the start of
-the current buffer."
-  :type 'boolean
+the current buffer.  Valid values are t for \"always collect from
+other files\", nil for \"never collect from other files\",
+`:unopened-buffer' for \"only collect from files not currently
+open\", and `:unknown-buffer' for \"only collect from files not
+tied to the current SBT session\".  `:unknown-buffer' only works
+if `flycheck-scala-sbt-trigger-other-buffers' is set."
+  :type '(choice (const :tag "Yes" t)
+                 (const :tag "No" nil)
+                 (const :tag "Only for unopened files" :unopened-buffers)
+                 (const :tag "Only for files unassociated with the current SBT session" :unknown-buffer))
   :tag "Collect from other files"
   :group 'flycheck-scala-sbt)
 
@@ -438,9 +446,10 @@ error occurred."
 (defun flycheck-scala-sbt--errors-convert (check errors)
   "For the check run CHECK, convert the list of ERRORS to flycheck error objects."
   (when (buffer-live-p (flycheck-scala-sbt--check-buffer check))
-    (with-current-buffer (flycheck-scala-sbt--check-buffer check)
-      (let ((checker (flycheck-scala-sbt--check-checker check)))
-        (cl-mapcan (lambda (error) (flycheck-scala-sbt--convert-error-info checker error)) errors)))))
+    (let ((state (flycheck-scala-sbt--state)))
+      (with-current-buffer (flycheck-scala-sbt--check-buffer check)
+        (let ((checker (flycheck-scala-sbt--check-checker check)))
+          (cl-mapcan (lambda (error) (flycheck-scala-sbt--convert-error-info checker error (flycheck-scala-sbt--state-known-buffers state))) errors))))))
 
 (defun flycheck-scala-sbt--interrupt (checker context)
   "Cancel CHECKER's pending check CONTEXT.
@@ -455,8 +464,8 @@ behind some other running check."
       (setf (flycheck-scala-sbt--state-pending state) (remove context (flycheck-scala-sbt--state-pending state)))
       (funcall (flycheck-scala-sbt--check-callback context) 'interrupted nil))))
 
-(defun flycheck-scala-sbt--convert-error-info (checker error)
-  "Provide CHECKER an ERROR converted into a flycheck-error.
+(defun flycheck-scala-sbt--convert-error-info (checker error known-buffers)
+  "Provide CHECKER an ERROR converted into a flycheck-error with KNOWN-BUFFERS.
 
 ERROR should come from `flycheck-scala-sbt--extract-error-info'."
   (let* ((file (nth 0 error))
@@ -471,7 +480,11 @@ ERROR should come from `flycheck-scala-sbt--extract-error-info'."
     (cond
      ((eql buffer (current-buffer))
       (list (flycheck-error-new :buffer buffer :message message :checker checker :filename file :line row :column col :level level)))
-     (flycheck-scala-sbt-collect-from-other-files-p
+     ((or (eql flycheck-scala-sbt-collect-from-other-files-p t)
+          (and (eql flycheck-scala-sbt-collect-from-other-files-p :unopened-buffers)
+               (null buffer))
+          (and (eql flycheck-scala-sbt-collect-from-other-files-p :unknown-buffer)
+               (not (gethash buffer known-buffers))))
       (list (flycheck-error-new :buffer (current-buffer)
                                 :message (concat "from " file ":" (prin1-to-string row) ":" (prin1-to-string col) ":\n  " (replace-regexp-in-string "\n" "\n  " message))
                                 :checker checker
