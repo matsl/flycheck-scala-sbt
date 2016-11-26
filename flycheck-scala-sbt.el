@@ -175,7 +175,7 @@ them, and there is a non-empty set of current checkers."
   ;; prompts and issue commands, until finally we can collect errors
   ;; and invoke the right callbacks with them.
   (flycheck-scala-sbt--debug "Starting %s job(s)" (length (flycheck-scala-sbt--state-active (flycheck-scala-sbt--state))))
-  (cl-labels ((kickoff ()
+  (cl-labels ((kickoff-pending ()
                 (let ((state (flycheck-scala-sbt--state)))
                   (cl-shiftf (flycheck-scala-sbt--state-active state) (flycheck-scala-sbt--state-pending state) nil)
                   (when (flycheck-scala-sbt--state-active state)
@@ -197,8 +197,8 @@ them, and there is a non-empty set of current checkers."
                                  (funcall (flycheck-scala-sbt--check-callback check) 'errored (error-message-string err)))))))
                       (error ;; this is almsot certainly from accumulating the errors list
                        (ignore-errors
-                         (broadcast-error-and-kickoff (error-message-string err))))))
-                  (kickoff)))
+                         (broadcast-error (error-message-string err))))))
+                  (kickoff-pending)))
               (finish-post-reload ()
                 ;; We've just issued a reload.  Now we need to wait
                 ;; for that to finish.
@@ -226,14 +226,13 @@ them, and there is a non-empty set of current checkers."
                      ;; just collect what diagnostics we have.
                      t))
                   (finish)))
-              (broadcast-error-and-kickoff (msg)
+              (broadcast-error (msg)
                 (let ((state (flycheck-scala-sbt--state)))
                   (dolist (check (flycheck-scala-sbt--state-active state))
                     (ignore-errors
                       (funcall (flycheck-scala-sbt--check-callback check)
                                'errored
-                               msg))))
-                (kickoff)))
+                               msg))))))
     (flycheck-scala-sbt--wait-for-prompt-then (:prompt-type prompt-type)
       (save-window-excursion
         (cl-ecase prompt-type
@@ -260,7 +259,8 @@ them, and there is a non-empty set of current checkers."
                  (sbt:clear (current-buffer))
                  (comint-send-string (current-buffer) ":quit\n")
                  (flycheck-scala-sbt--actually-start))
-             (broadcast-error-and-kickoff "SBT is in a console session.  Exit it to reenable flycheck.")))
+             (broadcast-error "SBT is in a console session.  Exit it to reenable flycheck")
+             (kickoff-pending)))
           (:build-error
            ;; nope, we left off in a bad place.  Issue a retry and
            ;; see if that fixes things.
@@ -268,7 +268,8 @@ them, and there is a non-empty set of current checkers."
                (progn
                  (flycheck-scala-sbt--issue-retry)
                  (finish-post-reload))
-             (broadcast-error-and-kickoff "The project failed to load."))))))))
+             (broadcast-error "The project failed to load")
+             (kickoff-pending))))))))
 
 (defun flycheck-scala-sbt--start (checker callback)
   "The main entry point for the CHECKER.  Don't call this.  CALLBACK."
