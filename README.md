@@ -19,8 +19,12 @@ behaviors:
 
 * Reloading the project automatically (default on)
 * Exiting the REPL in order to run a check (default on)
-* Displaying errors from other files in the current buffer (default on)
-* Enabling in Java-mode if an SBT project root is discovered (default off)
+* Displaying errors from other files in the current buffer (default
+  on)
+* Enabling in Java-mode if an SBT project root is discovered (default
+  off)
+* Initiating flychecks in other buffers open on the same project
+  (somewhat experimental; default off)
 
 Mixed Java/Scala Projects
 -------------------------

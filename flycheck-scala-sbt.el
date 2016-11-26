@@ -70,13 +70,36 @@ be restarted, as it affects the way the checker is defined."
   :tag "Display extra debugging messages"
   :group 'flycheck-scala-sbt)
 
+(defcustom flycheck-scala-sbt-trigger-other-buffers-p
+  nil
+  "Initiate checks in all other buffers that share the same SBT session.
+
+Changes in one file can affect other open files.  This can be
+confusing when you make a change and then switch to another
+existing buffer in the same project, as that other buffer will
+not be rechecked unless it is either saved or `flycheck-buffer'
+is explicitly called.  This configuration option causes
+flychecking a Scala buffer automatically initiate checks in all
+other buffers that share the same session.  SBT will only
+actually compile once, but the errors will be distributed to all
+relevant buffers.
+
+This option is somewhat experimental."
+  :type 'boolean
+  :tag "Initiate checks in all buffers that share an SBT session"
+  :group 'flycheck-scala-sbt)
+
 (cl-defstruct flycheck-scala-sbt--check buffer checker project-p callback)
-(cl-defstruct flycheck-scala-sbt--state current-timer active pending)
+(cl-defstruct flycheck-scala-sbt--state current-timer active pending known-buffers recursing-p)
 (defvar-local flycheck-scala-sbt--raw-state nil)
 (defun flycheck-scala-sbt--state ()
   "Return the current buffer's state, creating it if necessary."
   (unless flycheck-scala-sbt--raw-state
-    (setf flycheck-scala-sbt--raw-state (make-flycheck-scala-sbt--state :current-timer nil :active nil :pending nil)))
+    (setf flycheck-scala-sbt--raw-state (make-flycheck-scala-sbt--state :current-timer nil
+                                                                        :active nil
+                                                                        :pending nil
+                                                                        :known-buffers (make-hash-table)
+                                                                        :recursing-p nil)))
   flycheck-scala-sbt--raw-state)
 
 (defun flycheck-scala-sbt--build-error-p (line)
@@ -255,13 +278,27 @@ them, and there is a non-empty set of current checkers."
       (with-current-buffer (sbt:run-sbt)
         (let ((state (flycheck-scala-sbt--state))
               (check (make-flycheck-scala-sbt--check :buffer target-buffer :checker checker :project-p project-p :callback callback)))
-          (if (flycheck-scala-sbt--state-active state)
+          (if (and (flycheck-scala-sbt--state-active state) (not (flycheck-scala-sbt--state-recursing-p state)))
               (progn
                 (flycheck-scala-sbt--debug "There is a check active for this SBT; deferring")
                 (push check (flycheck-scala-sbt--state-pending state)))
             (flycheck-scala-sbt--debug "None active; starting")
             (push check (flycheck-scala-sbt--state-active state))
-            (flycheck-scala-sbt--actually-start))
+            (unless (flycheck-scala-sbt--state-recursing-p state)
+              (when flycheck-scala-sbt-trigger-other-buffers-p
+                (puthash target-buffer t (flycheck-scala-sbt--state-known-buffers state))
+                (flycheck-scala-sbt--debug "There are %s known buffers sharing this SBT session" (hash-table-count (flycheck-scala-sbt--state-known-buffers state)))
+                (unwind-protect
+                    (progn
+                      (setf (flycheck-scala-sbt--state-recursing-p state) t)
+                      (dolist (buffer (hash-table-keys (flycheck-scala-sbt--state-known-buffers state)))
+                        (if (buffer-live-p buffer)
+                            (unless (eql buffer target-buffer)
+                              (with-current-buffer buffer
+                                (flycheck-buffer)))
+                          (remhash buffer (flycheck-scala-sbt--state-known-buffers state)))))
+                  (setf (flycheck-scala-sbt--state-recursing-p state) nil)))
+              (flycheck-scala-sbt--actually-start)))
           check)))))
 
 (defconst flycheck-scala-sbt--weird-buildscript-regex "^\\[\\(error\\|warn\\)][[:space:]]\\[\\(.*\\)]:\\([0-9]+\\):[[:space:]]\\(.*\\)$")
