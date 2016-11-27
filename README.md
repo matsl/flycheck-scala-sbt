@@ -25,6 +25,9 @@ behaviors:
   off)
 * Initiating flychecks in other buffers open on the same project
   (somewhat experimental; default off)
+* Creating a buffer containing all project errors that can be jumped
+  to, like `flycheck-list-errors` but which can operate across files
+  (default off)
 
 Mixed Java/Scala Projects
 -------------------------
@@ -41,6 +44,7 @@ intrinsically a whole-project compiler.  flycheck-scala-sbt provides a
 couple of ways to deal with this.  First, customizing the
 `flycheck-scala-sbt-collect-from-other-files-p` variable controls
 whether errors from other files will be displayed (at the very top) of
-the current buffer when a check is run.  In addition, the whole list
-of errors is placed in a buffer which can be accessed via the
+the current buffer when a check is run.  In addition, if
+`flycheck-scala-sbt-create-error-buffer-p` is true the whole list of
+errors is placed in a buffer which can be accessed via the
 `flycheck-scala-sbt-show-errors-list` command.
