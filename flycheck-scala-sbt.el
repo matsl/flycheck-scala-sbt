@@ -213,7 +213,7 @@ itself."
       (error "No SBT error list available for the current buffer"))))
 
 (cl-defstruct flycheck-scala-sbt--check buffer checker project-p callback)
-(cl-defstruct flycheck-scala-sbt--state current-timer active pending known-buffers recursing-p)
+(cl-defstruct flycheck-scala-sbt--state current-timer active pending known-buffers recursing)
 (defvar-local flycheck-scala-sbt--raw-state nil)
 (defun flycheck-scala-sbt--state ()
   "Return the current buffer's state, creating it if necessary."
@@ -222,7 +222,7 @@ itself."
                                                                         :active nil
                                                                         :pending nil
                                                                         :known-buffers (make-hash-table)
-                                                                        :recursing-p nil)))
+                                                                        :recursing nil)))
   flycheck-scala-sbt--raw-state)
 
 (defun flycheck-scala-sbt--build-error-p (line)
@@ -395,33 +395,48 @@ them, and there is a non-empty set of current checkers."
            (broadcast-error "The project failed to load")
            (kickoff-pending)))))))
 
+(defun flycheck-scala-sbt--recursively-start-other-buffers (target-buffer state mode)
+  "Starting from TARGET-BUFFER, start flychecks in other buffers that share the same STATE, propagating MODE to them."
+  (when (and flycheck-scala-sbt-trigger-other-buffers-p
+             (not (flycheck-scala-sbt--state-recursing state)))
+    (puthash target-buffer t (flycheck-scala-sbt--state-known-buffers state))
+    (flycheck-scala-sbt--debug "There are %s known buffers sharing this SBT session" (hash-table-count (flycheck-scala-sbt--state-known-buffers state)))
+    (unwind-protect
+        (progn
+          (setf (flycheck-scala-sbt--state-recursing state) mode)
+          (dolist (buffer (hash-table-keys (flycheck-scala-sbt--state-known-buffers state)))
+            (if (buffer-live-p buffer)
+                (unless (eql buffer target-buffer)
+                  (with-current-buffer buffer
+                    (flycheck-buffer)))
+              (remhash buffer (flycheck-scala-sbt--state-known-buffers state)))))
+      (setf (flycheck-scala-sbt--state-recursing state) nil))))
+
 (defun flycheck-scala-sbt--start (checker callback)
-  "The main entry point for the CHECKER.  Don't call this.  CALLBACK."
+  "The main entry point for the CHECKER.  Don't call this.  CALLBACK.
+
+This is weirdly shaped because we may want to start flychecks in
+other buffers, and the only way to do that is ultimately to call
+`flycheck-buffer' (which is done in
+`flycheck-scala-sbt--recursively-start-other-buffers').  Note
+that we want to do this even if the state is pending.  In either
+case, the recursively created checks will simply push a check
+object onto one of the two lists in the current state."
   (let* ((target-buffer (current-buffer))
          (project-p (flycheck-scala-sbt--build-script-p target-buffer)))
     (with-current-buffer (save-window-excursion (sbt:run-sbt))
       (let ((state (flycheck-scala-sbt--state))
             (check (make-flycheck-scala-sbt--check :buffer target-buffer :checker checker :project-p project-p :callback callback)))
-        (if (and (flycheck-scala-sbt--state-active state) (not (flycheck-scala-sbt--state-recursing-p state)))
+        (if (and (flycheck-scala-sbt--state-active state)
+                 (not (eql (flycheck-scala-sbt--state-recursing state) 'active)))
             (progn
               (flycheck-scala-sbt--debug "There is a check active for this SBT; deferring")
-              (push check (flycheck-scala-sbt--state-pending state)))
-          (flycheck-scala-sbt--debug "None active; starting")
+              (push check (flycheck-scala-sbt--state-pending state))
+              (flycheck-scala-sbt--recursively-start-other-buffers target-buffer state 'pending))
+          (flycheck-scala-sbt--debug "None active (or we're recursing to create active checks); starting")
           (push check (flycheck-scala-sbt--state-active state))
-          (unless (flycheck-scala-sbt--state-recursing-p state)
-            (when flycheck-scala-sbt-trigger-other-buffers-p
-              (puthash target-buffer t (flycheck-scala-sbt--state-known-buffers state))
-              (flycheck-scala-sbt--debug "There are %s known buffers sharing this SBT session" (hash-table-count (flycheck-scala-sbt--state-known-buffers state)))
-              (unwind-protect
-                  (progn
-                    (setf (flycheck-scala-sbt--state-recursing-p state) t)
-                    (dolist (buffer (hash-table-keys (flycheck-scala-sbt--state-known-buffers state)))
-                      (if (buffer-live-p buffer)
-                          (unless (eql buffer target-buffer)
-                            (with-current-buffer buffer
-                              (flycheck-buffer)))
-                        (remhash buffer (flycheck-scala-sbt--state-known-buffers state)))))
-                (setf (flycheck-scala-sbt--state-recursing-p state) nil)))
+          (flycheck-scala-sbt--recursively-start-other-buffers target-buffer state 'active)
+          (unless (flycheck-scala-sbt--state-recursing state)
             (flycheck-scala-sbt--actually-start)))
         check))))
 
@@ -577,9 +592,7 @@ error occurred."
                                       :level (car (cl-sort (mapcar 'cadr (cl-remove-if-not other-buffer-p converted-errors))
                                                            '<
                                                            :key (lambda (x)
-                                                                  (message "a")
-                                                                  (prog1 (- (flycheck-error-level-severity x))
-                                                                    (message "b"))))))
+                                                                  (- (flycheck-error-level-severity x))))))
                   (cl-remove-if other-buffer-p converted-errors))))))))
 
 (defun flycheck-scala-sbt--interrupt (checker context)
