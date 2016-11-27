@@ -97,6 +97,61 @@ This option is somewhat experimental."
   :tag "Initiate checks in all buffers that share an SBT session"
   :group 'flycheck-scala-sbt)
 
+;; This is a bit of a workaround for flycheck's lack of any idea of
+;; project-wide diagnostic collection.  We'll use tabulated-list-mode
+;; to manage a list of all our project-wide errors ourselves.
+(define-derived-mode flycheck-scala-sbt-errors-mode tabulated-list-mode "flycheck-scala-sbt"
+  (setq tabulated-list-format [("File" 30 t)
+                               ("Type" 7 t)
+                               ("Message" 0 t)]
+        tabulated-list-padding 2
+        tabulated-list-sort-key (cons "File" nil))
+  (tabulated-list-init-header))
+
+(defun flycheck-scala-sbt--error-buffer-name ()
+  "Compute the name of the error buffer for the current buffer."
+  (save-window-excursion
+    (with-current-buffer (current-buffer)
+      (concat (buffer-name (sbt:run-sbt)) "/errors"))))
+
+(defun flycheck-scala-sbt--populate-sbt-errors (errors)
+  "Populate the error buffer with ERRORS.
+
+Returns the buffer.  Should only be called from the SBT buffer
+itself."
+  (with-current-buffer (get-buffer-create (flycheck-scala-sbt--error-buffer-name))
+    (flycheck-scala-sbt-errors-mode)
+    (let ((message-prefix (concat "\n" (make-string (+ 2 30 2 7) ?\s))))
+      (setq tabulated-list-entries (mapcar (lambda (error)
+                                             (let* ((file (elt error 0))
+                                                    (goto-error (lambda (button)
+                                                                  (ignore button)
+                                                                  (find-file-other-window file)
+                                                                  (goto-char (point-min))
+                                                                  (beginning-of-line (elt error 1))
+                                                                  (when (elt error 2)
+                                                                    (forward-char (1- (elt error 2))))))
+                                                    (file-button (cons (file-name-nondirectory file) (list 'action goto-error
+                                                                                                           'help-echo file)))
+                                                    (type (cons (symbol-name (elt error 3)) (list 'face (cl-ecase (elt error 3)
+                                                                                                          (error 'error)
+                                                                                                          (warning 'warning))
+                                                                                                  'action goto-error
+                                                                                                  'help-echo file)))
+                                                    (message (replace-regexp-in-string "\n" message-prefix (elt error 4))))
+                                               (list nil (vector file-button type message))))
+                                           errors)))
+    (tabulated-list-print)
+    (current-buffer)))
+
+(defun flycheck-scala-sbt-show-errors-list ()
+  "Show the current SBT error list."
+  (interactive)
+  (let ((target-buffer (get-buffer (flycheck-scala-sbt--error-buffer-name))))
+    (if target-buffer
+        (pop-to-buffer target-buffer)
+      (error "No SBT error list available for the current buffer"))))
+
 (cl-defstruct flycheck-scala-sbt--check buffer checker project-p callback)
 (cl-defstruct flycheck-scala-sbt--state current-timer active pending known-buffers recursing-p)
 (defvar-local flycheck-scala-sbt--raw-state nil)
@@ -195,6 +250,7 @@ them, and there is a non-empty set of current checkers."
                   (let ((state (flycheck-scala-sbt--state)))
                     (condition-case err
                         (let ((errors (flycheck-scala-sbt--errors-list)))
+                          (flycheck-scala-sbt--populate-sbt-errors errors)
                           (dolist (check (flycheck-scala-sbt--state-active state))
                             (condition-case err
                                 (funcall (flycheck-scala-sbt--check-callback check)
@@ -328,7 +384,27 @@ them, and there is a non-empty set of current checkers."
       (goto-char (point-min))
       (while (re-search-forward flycheck-scala-sbt--weird-buildscript-regex (point-max) t)
         (push (flycheck-scala-sbt--extract-weird-error-info) acc))
-      (reverse acc))))
+      (sort acc (lambda (e1 e2)
+                  (cl-destructuring-bind (file1 row1 col1 type1 message1) e1
+                    (cl-destructuring-bind (file2 row2 col2 type2 message2) e2
+                      ;; ew.  Surely there's a better way to write this.
+                      (if (string-lessp file1 file2)
+                          t
+                        (if (string-lessp file2 file1)
+                            nil
+                          (if (< row1 row2)
+                              t
+                            (if (> row2 row1)
+                                nil
+                              (if (< (or col1 -1) (or col2 -1))
+                                  t
+                                (if (< (or col2 -1) (or col1 -1))
+                                    nil
+                                  (if (string-lessp type1 type2)
+                                      t
+                                    (if (string-lessp type2 type1)
+                                        nil
+                                      (string-lessp message1 message2))))))))))))))))
 
 (defun flycheck-scala-sbt--extract-weird-error-info ()
   "Extract errors from build scripts in the occasional weird format.

@@ -33,3 +33,14 @@ If you configure flycheck-scala-sbt for java-mode as well, add
 `(flycheck-scala-sbt-init)` to your java-mode hook to set it up
 properly as an on-save checker.
 
+Dealing with cross-file errors
+------------------------------
+
+Flycheck does not support errors in multiple files, but SBT is
+intrinsically a whole-project compiler.  flycheck-scala-sbt provides a
+couple of ways to deal with this.  First, customizing the
+`flycheck-scala-sbt-collect-from-other-files-p` variable controls
+whether errors from other files will be displayed (at the very top) of
+the current buffer when a check is run.  In addition, the whole list
+of errors is placed in a buffer which can be accessed via the
+`flycheck-scala-sbt-show-errors-list` command.
