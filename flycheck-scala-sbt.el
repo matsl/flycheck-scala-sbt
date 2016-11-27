@@ -123,23 +123,27 @@ itself."
     (flycheck-scala-sbt-errors-mode)
     (let ((message-prefix (concat "\n" (make-string (+ 2 30 2 7) ?\s))))
       (setq tabulated-list-entries (mapcar (lambda (error)
-                                             (let* ((file (elt error 0))
-                                                    (goto-error (lambda (button)
-                                                                  (ignore button)
-                                                                  (find-file-other-window file)
-                                                                  (goto-char (point-min))
-                                                                  (beginning-of-line (elt error 1))
-                                                                  (when (elt error 2)
-                                                                    (forward-char (1- (elt error 2))))))
-                                                    (file-button (cons (file-name-nondirectory file) (list 'action goto-error
-                                                                                                           'help-echo file)))
-                                                    (type (cons (symbol-name (elt error 3)) (list 'face (cl-ecase (elt error 3)
-                                                                                                          (error 'error)
-                                                                                                          (warning 'warning))
-                                                                                                  'action goto-error
-                                                                                                  'help-echo file)))
-                                                    (message (replace-regexp-in-string "\n" message-prefix (elt error 4))))
-                                               (list nil (vector file-button type message))))
+                                             (cl-destructuring-bind (file row col type message) error
+                                               (let* ((file-pos (if col
+                                                                    (format ":%s:%s" row col)
+                                                                  (format ":%s" row)))
+                                                      (goto-error (lambda (button)
+                                                                    (ignore button)
+                                                                    (find-file-other-window file)
+                                                                    (goto-char (point-min))
+                                                                    (beginning-of-line row)
+                                                                    (when col
+                                                                      (forward-char (1- col)))))
+                                                      (file-button (cons (concat (file-name-nondirectory file) file-pos)
+                                                                         (list 'action goto-error
+                                                                               'help-echo (concat file file-pos))))
+                                                      (type (cons (symbol-name type) (list 'face (cl-ecase type
+                                                                                                   (error 'error)
+                                                                                                   (warning 'warning))
+                                                                                           'action goto-error
+                                                                                           'help-echo (concat file file-pos))))
+                                                      (message (replace-regexp-in-string "\n" message-prefix message)))
+                                                 (list nil (vector file-button type message)))))
                                            errors)))
     (tabulated-list-print)
     (current-buffer)))
