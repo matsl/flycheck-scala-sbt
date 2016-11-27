@@ -1,4 +1,4 @@
-flycheck-scala-sbt
+flycheck-scala-sbt [![MELPA](https://melpa.org/packages/flycheck-scala-sbt-badge.svg)](https://melpa.org/#/flycheck-scala-sbt)
 ==================
 
 A [flycheck](http://www.flycheck.org/) checker for Scala which uses
