@@ -443,27 +443,7 @@ them, and there is a non-empty set of current checkers."
       (goto-char (point-min))
       (while (re-search-forward flycheck-scala-sbt--weird-buildscript-regex (point-max) t)
         (push (flycheck-scala-sbt--extract-weird-error-info) acc))
-      (sort acc (lambda (e1 e2)
-                  (cl-destructuring-bind (file1 row1 col1 type1 message1) e1
-                    (cl-destructuring-bind (file2 row2 col2 type2 message2) e2
-                      ;; ew.  Surely there's a better way to write this.
-                      (if (string-lessp file1 file2)
-                          t
-                        (if (string-lessp file2 file1)
-                            nil
-                          (if (< row1 row2)
-                              t
-                            (if (> row2 row1)
-                                nil
-                              (if (< (or col1 -1) (or col2 -1))
-                                  t
-                                (if (< (or col2 -1) (or col1 -1))
-                                    nil
-                                  (if (string-lessp type1 type2)
-                                      t
-                                    (if (string-lessp type2 type1)
-                                        nil
-                                      (string-lessp message1 message2))))))))))))))))
+      acc)))
 
 (defun flycheck-scala-sbt--extract-weird-error-info ()
   "Extract errors from build scripts in the occasional weird format.
