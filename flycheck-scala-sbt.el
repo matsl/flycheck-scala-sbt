@@ -441,6 +441,7 @@ object onto one of the two lists in the current state."
         check))))
 
 (defconst flycheck-scala-sbt--weird-buildscript-regex "^\\[\\(error\\|warn\\)][[:space:]]\\[\\(.*\\)]:\\([0-9]+\\):[[:space:]]\\(.*\\)$")
+(defconst flycheck-scala-sbt--java-regex "^\\[\\(error\\|warn\\)][[:space:]]\\(.*\\):\\([0-9]+\\):[[:space:]]\\(.*\\)$")
 (defun flycheck-scala-sbt--errors-list ()
   "Find the current list of errors in the current buffer."
   (save-excursion
@@ -457,10 +458,13 @@ object onto one of the two lists in the current state."
         (push (flycheck-scala-sbt--extract-error-info) acc))
       (goto-char (point-min))
       (while (re-search-forward flycheck-scala-sbt--weird-buildscript-regex (point-max) t)
-        (push (flycheck-scala-sbt--extract-weird-error-info) acc))
+        (push (flycheck-scala-sbt--extract-weird-error-info flycheck-scala-sbt--weird-buildscript-regex) acc))
+      (goto-char (point-min))
+      (while (re-search-forward flycheck-scala-sbt--java-regex (point-max) t)
+        (push (flycheck-scala-sbt--extract-weird-error-info flycheck-scala-sbt--java-regex) acc))
       acc)))
 
-(defun flycheck-scala-sbt--extract-weird-error-info ()
+(defun flycheck-scala-sbt--extract-weird-error-info (regex)
   "Extract errors from build scripts in the occasional weird format.
 
 This format is [error] [$PATH]:$LINE: $MESSAGE.  There's no
@@ -468,7 +472,7 @@ column information here, so we'll just set the column to nil"
   (save-excursion
     (let ((line (buffer-substring-no-properties (line-beginning-position)
                                                  (line-end-position))))
-      (string-match flycheck-scala-sbt--weird-buildscript-regex line)
+      (string-match regex line)
       (let ((type (match-string 1 line))
             (file (match-string 2 line))
             (row (string-to-number (match-string 3 line)))
