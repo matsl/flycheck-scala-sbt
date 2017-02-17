@@ -445,7 +445,9 @@ object onto one of the two lists in the current state."
 (defun flycheck-scala-sbt--errors-list ()
   "Find the current list of errors in the current buffer."
   (save-excursion
-    (let ((acc '()))
+    (let ((scala-errors '())
+          (sbt-errors '())
+          (java-errors '()))
       ;; The horror, the horror
       ;;
       ;; Ok so.
@@ -455,18 +457,20 @@ object onto one of the two lists in the current state."
       ;; find the relevant filename, row, and message.
       (goto-char (point-min))
       (while (re-search-forward "^\\(\\[\\(error\\|warn\\)][[:space:]]\\)?[[:space:]]*^$" (point-max) t)
-        (push (flycheck-scala-sbt--extract-error-info) acc))
+        (push (flycheck-scala-sbt--extract-error-info) scala-errors))
       (goto-char (point-min))
       (while (re-search-forward flycheck-scala-sbt--weird-buildscript-regex (point-max) t)
-        (push (flycheck-scala-sbt--extract-weird-error-info flycheck-scala-sbt--weird-buildscript-regex) acc))
+        (push (flycheck-scala-sbt--extract-weird-error-info flycheck-scala-sbt--weird-buildscript-regex) sbt-errors))
       (goto-char (point-min))
       (while (re-search-forward flycheck-scala-sbt--java-regex (point-max) t)
-        (let ((new-error (flycheck-scala-sbt--extract-weird-error-info flycheck-scala-sbt--java-regex)))
+        (let ((new-error (flycheck-scala-sbt--extract-weird-error-info flycheck-scala-sbt--java-regex))
+              (old-errors (append sbt-errors scala-errors)))
           (unless (find-if (lambda (old-error)
                              (and (string= (first old-error) (first new-error))
-                                  (= (second old-error) (second new-error)))) acc)
-           (push new-error acc))))
-      acc)))
+                                  (= (second old-error) (second new-error))))
+                           old-errors)
+           (push new-error java-errors))))
+      (append java-errors sbt-errors scala-errors))))
 
 (defun flycheck-scala-sbt--extract-weird-error-info (regex)
   "Extract errors from build scripts in the occasional weird format.
