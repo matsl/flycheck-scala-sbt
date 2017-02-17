@@ -461,7 +461,11 @@ object onto one of the two lists in the current state."
         (push (flycheck-scala-sbt--extract-weird-error-info flycheck-scala-sbt--weird-buildscript-regex) acc))
       (goto-char (point-min))
       (while (re-search-forward flycheck-scala-sbt--java-regex (point-max) t)
-        (push (flycheck-scala-sbt--extract-weird-error-info flycheck-scala-sbt--java-regex) acc))
+        (let ((new-error (flycheck-scala-sbt--extract-weird-error-info flycheck-scala-sbt--java-regex)))
+          (unless (find-if (lambda (old-error)
+                             (and (string= (first old-error) (first new-error))
+                                  (= (second old-error) (second new-error)))) acc)
+           (push new-error acc))))
       acc)))
 
 (defun flycheck-scala-sbt--extract-weird-error-info (regex)
