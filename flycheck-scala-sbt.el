@@ -1,5 +1,7 @@
 ;;; flycheck-scala-sbt.el --- sbt-mode checker for Scala -*- lexical-binding: t -*-
 
+;; License: public-domain
+
 ;; Version: 0.1
 ;; Url: https://www.github.com/rjmac/flycheck-scala-sbt
 ;; Package-requires: ((emacs "25.1") (flycheck "30") (sbt-mode "0.2"))
